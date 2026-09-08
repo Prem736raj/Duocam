@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="108"
+                android:endY="108"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item
+                    android:color="#09090B"
+                    android:offset="0.0" />
+                <item
+                    android:color="#1C1917"
+                    android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Cinematic dual focal rings representing front + back recording lenses -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M 54,54 m -42,0 a 42,42 0 1,1 84,0 a 42,42 0 1,1 -84,0"
+        android:strokeColor="#27272A"
+        android:strokeWidth="1.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M 54,54 m -30,0 a 30,30 0 1,1 60,0 a 30,30 0 1,1 -60,0"
+        android:strokeColor="#FF2E56"
+        android:strokeWidth="0.8"
+        android:strokeAlpha="0.15" />
+</vector>

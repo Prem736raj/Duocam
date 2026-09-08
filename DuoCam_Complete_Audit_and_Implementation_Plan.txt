@@ -1,0 +1,2461 @@
+DUOCAM — COMPLETE PRODUCTION AUDIT + IMPLEMENTATION PLAN
+======================================================================
+
+Repository audited: Prem736raj/Duocam
+Repository URL: https://github.com/Prem736raj/Duocam
+Audit baseline: main @ 57e9c6cdf395ecb9b31b806fb3159aa117e4cfe6
+Commit: Replace prototype with production-hardening V1 (#1)
+Audit date: 2026-09-08
+
+IMPORTANT BASELINE NOTE
+-----------------------
+This report audits the CURRENT main branch above. The repository changed substantially from the earlier prototype. The current main branch is a much smaller local-first application. Previously simulated cloud backup, billing, editor/compression, synthetic recording output, and fake hardware panels are no longer in the current production source surface.
+
+Verification legend:
+PASS = actually verified by current GitHub Actions run or direct source evidence.
+FAIL = confirmed defect from source/API contract or actual failed verification.
+NOT TESTED = no reliable runtime execution evidence was available.
+RUNTIME VERIFICATION REQUIRED = implementation exists but device/hardware behavior cannot be proven statically.
+
+======================================================================
+REPOSITORY SURFACE AUDITED
+======================================================================
+
+Build / repository:
+- .github/workflows/android.yml
+- .gitignore
+- BUILDING.md
+- build.gradle.kts
+- settings.gradle.kts
+- gradle.properties
+- gradle/libs.versions.toml
+- gradle/wrapper/gradle-wrapper.properties
+- gradle/wrapper/gradle-wrapper.jar
+- gradlew
+- gradlew.bat
+- metadata.json
+- app/build.gradle.kts
+- app/proguard-rules.pro
+- app/.gitignore
+
+Production source:
+- app/src/main/AndroidManifest.xml
+- app/src/main/java/com/example/MainActivity.kt
+- app/src/main/java/com/example/GalleryScreen.kt
+- app/src/main/java/com/example/ScriptsScreen.kt
+- app/src/main/java/com/example/camera/CameraCapabilityManager.kt
+- app/src/main/java/com/example/camera/CameraController.kt
+- app/src/main/java/com/example/db/Folder.kt
+- app/src/main/java/com/example/db/Script.kt
+- app/src/main/java/com/example/db/ScriptDao.kt
+- app/src/main/java/com/example/db/ScriptDatabase.kt
+- app/src/main/java/com/example/ui/theme/Color.kt
+- app/src/main/java/com/example/ui/theme/Theme.kt
+- app/src/main/java/com/example/ui/theme/Type.kt
+
+Room schema:
+- app/schemas/com.example.db.ScriptDatabase/1.json
+
+Resources:
+- values/strings.xml
+- values/themes.xml
+- xml/backup_rules.xml
+- xml/data_extraction_rules.xml
+- adaptive launcher icon XML
+- launcher foreground/background vectors
+- density launcher WebPs / round icons
+
+Tests:
+- app/src/test/java/com/example/ExampleUnitTest.kt
+- app/src/test/java/com/example/ExampleRobolectricTest.kt
+- app/src/test/java/com/example/GreetingScreenshotTest.kt
+- app/src/androidTest/java/com/example/ExampleInstrumentedTest.kt
+
+Static searches checked TODO/FIXME/HACK, obvious credentials/secrets, old simulated cloud/billing/editor code, and dormant folder/favorite usage. No material TODO/FIXME/HACK marker was found in the current production Kotlin surface.
+
+======================================================================
+A. EXECUTIVE SUMMARY
+======================================================================
+
+OVERALL HEALTH SCORE: 6.0 / 10
+
+The current rewrite is dramatically healthier than the original prototype. The product direction is coherent: genuine CameraX capture, truthful concurrent-camera capability checks, teleprompter scripts, and a local MediaStore gallery. Dependencies are relatively small, permissions are mostly minimal, the Gradle wrapper is committed, and CI currently builds/tests/lints successfully.
+
+However, the most important runtime path still contains a P0 CameraX output contract bug: CameraController pre-inserts a MediaStore item and passes that ITEM URI to MediaStoreOutputOptions.Builder. CameraX expects a COLLECTION URI plus ContentValues. This compiles, so CI cannot catch it, but real recording can fail.
+
+A second P0 compatibility issue remains: minSdk is 24, but Android 9/API 28 and lower paths use shared MediaStore without declaring/requesting the required legacy storage permissions.
+
+The project is therefore not Play-release-ready despite a green debug CI run.
+
+Scores:
+- Functionality: 4.5/10
+- UI/UX: 6.5/10
+- Performance: 7.0/10
+- Security/Privacy: 8.0/10
+- Architecture: 5.5/10
+- Maintainability: 6.5/10
+- Accessibility: 6.5/10
+- Testing: 4.0/10
+- Release readiness: 4.5/10
+- Product quality: 7.0/10
+
+Key scoring rationale:
+- Real CameraX and Room are now present.
+- Fake cloud/billing/editor flows are gone.
+- Core recording destination is wrong.
+- API24–28 support is incomplete.
+- Camera permission blocks unrelated features.
+- Navigation can disrupt active recording finalization.
+- Composables still own too much framework/business state.
+- Tests and CI exist, but physical camera and release verification are missing.
+
+Overall decision:
+Do NOT rewrite DuoCam again. Fix the recording/storage contract, lifecycle/permission behavior, then validate on real hardware.
+
+======================================================================
+B. TECHNOLOGY STACK
+======================================================================
+
+Detected stack:
+- Kotlin 2.2.10
+- Gradle 9.3.1 wrapper
+- Android Gradle Plugin 9.1.1
+- Kotlin DSL + version catalog
+- KSP 2.3.6
+- applicationId: com.duocam.dual.camera.recorder
+- namespace: com.example
+- minSdk 24
+- targetSdk 36
+- compileSdk Android 36.1
+- Java source/target 11
+- Single Activity
+- Jetpack Compose
+- Material 3
+- Compose BOM 2024.09.00
+- custom enum/tab navigation, no Navigation Compose dependency
+- CameraX 1.5.3: camera2/core/lifecycle/video/view
+- ProcessCameraProvider
+- concurrent camera APIs
+- CompositionSettings
+- Recorder / VideoCapture / MediaStoreOutputOptions
+- Room 2.7.0
+- coroutines 1.10.2
+- MediaStore
+- VideoView + MediaController
+- ACTION_SEND sharing
+- JUnit 4
+- Robolectric 4.16.1
+- Roborazzi 1.59.0
+- GitHub Actions CI with JDK 21
+
+Not present in current production app:
+- Retrofit/OkHttp/Moshi
+- Firebase
+- backend APIs
+- ads/analytics
+- Play Billing
+- Google Drive
+- WorkManager
+- foreground service
+- broadcast receivers
+- WebView
+- deep links
+- authentication
+- cloud account system
+- media editor/transcoder pipeline
+
+======================================================================
+C. ARCHITECTURE MAP
+======================================================================
+
+Current flow:
+
+MainActivity
+  -> setContent()
+  -> MyApplicationTheme
+  -> DuoCamApp
+       -> AppTab state
+       -> CaptureScreen
+       -> ScriptsScreen
+       -> GalleryScreen
+
+Capture:
+CaptureScreen
+  -> CameraCapabilityManager.inspect()
+     -> ProcessCameraProvider
+     -> front/back camera selectors
+     -> availableConcurrentCameraInfos
+  -> CameraController
+     -> Preview
+     -> Recorder
+     -> VideoCapture
+     -> bindToLifecycle()
+     -> MediaStoreOutputOptions
+     -> MediaStore
+
+Scripts:
+ScriptsScreen
+  -> ScriptDatabase singleton
+  -> ScriptDao
+  -> Room/SQLite
+  -> Flow<List<Script>>
+  -> Compose state
+
+Gallery:
+GalleryScreen
+  -> ContentResolver
+  -> MediaStore query
+  -> LazyColumn
+  -> VideoView
+  -> ACTION_SEND
+  -> ContentResolver.delete()
+
+Current state ownership:
+- mostly local Compose state
+- no feature ViewModels
+- no repository layer around gallery/camera state
+- no DI framework
+
+Assessment:
+The app is too small to justify enterprise Clean Architecture. The actual problem is that Android framework operations are embedded directly inside Composables, reducing lifecycle control and testability.
+
+Recommended incremental target:
+Compose screen -> small feature ViewModel -> small repository/controller -> CameraX/MediaStore/Room
+
+Avoid adding Hilt or a use-case layer for every button at this stage.
+
+======================================================================
+D. CURRENT FEATURE STATUS
+======================================================================
+
+Legend: ✅ good | ⚠️ works with problems | 🟡 partial | ❌ broken | 🚫 absent | ❓ runtime verification required
+
+1. App shell / bottom navigation: ⚠️
+- Three tabs: Capture, Scripts, Gallery.
+- Problem: navigation remains available while recording.
+- Problem: camera permission blocks app before navigation is shown.
+
+2. Camera permission: ⚠️
+- RequestPermission(CAMERA).
+- App-wide gate is unnecessary.
+- Returning from system Settings can leave stale Compose state.
+
+3. Camera capability detection: ✅ / ❓
+- Real front/back detection.
+- Real availableConcurrentCameraInfos.
+- Real concurrent front/back selector pair.
+- No simulated hardware state.
+- Physical device matrix still required.
+
+4. Single-camera preview: ❓
+- Legitimate CameraX binding exists.
+- Must be verified on device.
+
+5. Single-camera recording: ❌
+- MediaStoreOutputOptions destination contract is wrong.
+
+6. Dual-camera composition: 🟡 / ❓
+- Genuine concurrent camera APIs.
+- Shared preview/video use-case group.
+- Picture-in-picture CompositionSettings.
+- Honest fallback to single.
+- Saved output still affected by P0.
+
+7. Single-camera fallback: ✅ statically
+- No fake feed.
+
+8. Microphone audio: 🟡
+- Contextual RECORD_AUDIO request.
+- Silent recording fallback is possible.
+- Core recording P0 and old Android storage still affect it.
+
+9. Teleprompter selection: ✅ / ⚠️
+- Uses Room-backed scripts.
+- Selection is not persisted across recreation/process restoration.
+
+10. Teleprompter auto-scroll: ⚠️
+- Loop keeps scheduling at end of content.
+
+11. Script create: ✅ statically
+12. Script edit: ✅ statically
+13. Script delete: ⚠️ no confirmation
+14. Folders: 🚫 UI absent; DB support exists
+15. Favorites: 🚫 UI absent; model support exists
+
+16. Room persistence: ✅ statically
+- destructive fallback is gone
+- schema export enabled
+
+17. Gallery Android 10+: ⚠️
+- RELATIVE_PATH query is appropriate
+- error handling weak
+- no thumbnails
+- playback is basic
+
+18. Gallery Android 7–9: ❌
+- DATA/shared MediaStore path exists
+- legacy storage permission flow missing
+
+19. Playback: ⚠️ / ❓
+20. Share: ⚠️ / ❓
+21. Delete: ⚠️
+- confirmation exists
+- provider/ownership exceptions not handled robustly
+
+22. Cloud backup UI: 🚫 intentionally absent
+23. Billing/Pro: 🚫 intentionally absent
+24. Video editor/compression: 🚫 intentionally absent
+
+25. Gemini/AI: 🚫 in runtime, but metadata.json incorrectly declares server-side Gemini capability.
+
+26. Debug build: PASS
+GitHub Actions run 34022237179:
+- clean PASS
+- assembleDebug PASS
+- testDebugUnitTest PASS
+- lintDebug PASS
+- BUILD SUCCESSFUL
+
+27. connected instrumentation: NOT TESTED
+28. signed release AAB: NOT TESTED
+
+======================================================================
+E. CONFIRMED BUGS
+======================================================================
+
+P0-001 — CameraX MediaStore destination contract is wrong
+Severity: P0 Critical
+File: app/src/main/java/com/example/camera/CameraController.kt
+Functions: startRecording(), createOutputUri(), finalizeRecording()
+
+Current flow:
+1. contentResolver.insert(collection, values)
+2. receives item URI
+3. passes item URI to MediaStoreOutputOptions.Builder(contentResolver, outputUri)
+
+Problem:
+CameraX expects a collection URI there, with ContentValues supplied via setContentValues(). CameraX should create the actual media row.
+
+User impact:
+Real recording can fail or finalize incorrectly.
+
+Correct solution:
+- build ContentValues
+- pass video collection URI
+- call setContentValues(values)
+- use Finalize.outputResults.outputUri as saved item URI
+- remove manual pre-insert/pending finalization logic
+
+P0-002 — minSdk 24 but API24–28 shared storage permissions are missing
+Severity: P0
+Files:
+- app/build.gradle.kts
+- AndroidManifest.xml
+- GalleryScreen.kt
+- CameraController.kt
+
+Problem:
+Android 9/API28 and lower shared MediaStore access requires legacy storage permissions; current manifest declares only CAMERA and RECORD_AUDIO.
+
+Fix:
+- READ_EXTERNAL_STORAGE maxSdkVersion=28
+- WRITE_EXTERNAL_STORAGE maxSdkVersion=28
+- request only on API<=28
+- do not add modern broad READ_MEDIA_VIDEO unless required
+
+P1-001 — Camera permission blocks Scripts and Gallery
+File: MainActivity.kt -> DuoCamApp()
+Fix: gate Capture only.
+
+P1-002 — Camera permission can remain stale after Settings
+Fix: refresh on Lifecycle.Event.ON_RESUME.
+
+P1-003 — Leaving Capture during recording can interrupt finalization
+Files: MainActivity.kt, CameraController.kt
+Cause: bottom navigation remains enabled; dispose calls release(); release stops then immediately unbinds.
+Fix: disable non-Capture tabs during recording/finalizing and wait for Finalize before unbind.
+
+P1-004 — Recorder assigned before camera bind is proven
+File: CameraController.bindWithProvider()
+Fix: recorder = null before bind; assign only after success; expose cameraReady.
+
+P1-005 — Script delete has no confirmation
+File: ScriptsScreen.kt
+Fix: confirmation dialog.
+
+P1-006 — Fixed 9:16 preview can clip controls
+File: MainActivity.kt -> CaptureScreen()
+Fix: weighted preview + bounded scrollable controls.
+
+P1-007 — Generic Gradle check can require release signing
+File: app/build.gradle.kts
+Fix: require release credentials only for explicit signed release packaging/publishing tasks.
+
+P2-001 — Teleprompter polls forever at end
+File: TeleprompterOverlay()
+Fix: stop at maxValue.
+
+P2-002 — ContentResolver finalization work on main executor
+File: CameraController.finalizeRecording()
+Fix: P0 rewrite eliminates unnecessary query/update/delete finalization.
+
+P2-003 — Selected script not saveable
+File: DuoCamApp()
+Fix: rememberSaveable script ID + DAO reload.
+
+P2-004 — Duplicate system inset handling
+Files: MainActivity.kt, GalleryScreen.kt
+Fix: one Scaffold/edge-to-edge strategy.
+
+P2-005 — Gallery provider/share/delete errors weak
+File: GalleryScreen.kt
+Fix: runCatching + user-facing error mapping.
+
+P2-006 — Privacy copy contradicts backup config
+Files: ScriptsScreen.kt, AndroidManifest.xml, backup XML
+Fix: accurate wording or explicit backup exclusion. Recommended: retain system backup and make wording accurate.
+
+P2-007 — User strings hardcoded in Kotlin
+Files: MainActivity.kt, GalleryScreen.kt, ScriptsScreen.kt
+Fix: move to strings.xml after P0/P1.
+
+P2-008 — metadata.json claims server-side Gemini capability that does not exist
+Fix: remove stale capability.
+
+P3-001 — Home icon used for Refresh
+P3-002 — Pause icon used for Stop
+P3-003 — Dormant folder/favorite/theme surface
+
+======================================================================
+F. POTENTIAL RUNTIME RISKS
+======================================================================
+
+These are NOT claimed as confirmed failures:
+- concurrent camera support varies by OEM
+- concurrent capture may impose resolution/stream limits
+- activity recreation during active recording
+- low storage/finalization behavior
+- playback codec differences by OEM
+- MediaStore deletion ownership after reinstall/restore
+- thermal stability for 10/30 minute recordings
+- TalkBack traversal and focus order
+
+All require runtime verification.
+
+======================================================================
+G. UI / UX AUDIT
+======================================================================
+
+G1. App launch / permission
+---------------------------
+Current:
+- Camera permission blocks the whole app.
+
+Good:
+- clear value proposition
+- truthful dual-camera capability language
+
+Problem:
+- Scripts and Gallery become inaccessible even though they do not require camera access.
+
+Recommended:
+- always show bottom navigation
+- gate only Capture
+- preserve current copy and visual direction
+
+G2. Capture screen
+------------------
+Good:
+- real capability text
+- obvious SINGLE/DUAL state
+- honest fallback
+- audio toggle
+- teleprompter
+- prominent record CTA
+- saving state
+
+Problems:
+1. fixed 9:16 preview can consume too much vertical height
+2. Stop action uses Pause icon
+3. navigation remains enabled while recording
+4. capability checked != camera successfully bound; UI lacks explicit ready state
+5. success card can linger
+6. selected script has Show/Hide but no direct Change Script action
+
+Recommended design:
+- preview should take remaining vertical space
+- controls should remain reachable on compact/large-font screens
+- disable non-Capture navigation while recording/finalizing
+- use Stop icon
+- expose cameraReady to CTA
+- add Change Script action
+
+G3. Teleprompter
+----------------
+Good:
+- readable 20sp text
+- strong black/white contrast
+- manual + auto scroll
+
+Problems:
+- speed only increments
+- no reset-to-top
+- no font-size control
+- loop continues at end
+- “x” speed label is not calibrated to real reading speed
+
+High-value additions:
+- slower/faster controls
+- reset
+- font-size control
+
+G4. Scripts
+-----------
+Good:
+- simple create/edit/use workflow
+- empty state
+- understandable editor
+
+Problems:
+- delete is immediate
+- DB failures are not surfaced
+- privacy wording is too absolute relative to Android backup
+- folder/favorite fields are dormant
+
+Recommendation:
+Keep a flat script list for V1. Do not build folders until users genuinely need them.
+
+G5. Gallery
+-----------
+Good:
+- local-only product boundary is clear
+- actual duration/size is displayed
+- playback/share/delete are connected to real Android operations
+- delete confirmation exists
+
+Problems:
+- Home icon represents Refresh
+- no thumbnails
+- VideoView is basic
+- provider/share/delete error handling is weak
+- API<=28 permission path missing
+
+High-value:
+- correct icon
+- provider-safe error states
+- thumbnails later
+- Media3 later if playback needs richer controls
+
+G6. Navigation
+--------------
+Current three-tab navigation is appropriate for app size.
+Do not add complex navigation architecture unless hierarchy grows.
+
+Required fix:
+- lock Scripts/Gallery while recording/finalizing
+
+G7. Edge-to-edge / insets
+-------------------------
+targetSdk 36 requires deliberate edge-to-edge behavior.
+Current Scaffold padding plus child status/navigation padding can duplicate spacing.
+
+Recommended:
+- call enableEdgeToEdge()
+- use Scaffold inner padding once
+- consume insets once
+- remove redundant statusBarsPadding/navigationBarsPadding
+
+G8. Tablets / large screens
+---------------------------
+Do not overbuild a tablet layout yet.
+Minimum:
+- cap list content width
+- keep recording controls reachable in landscape
+- verify target-36 large-screen behavior
+
+======================================================================
+H. PERFORMANCE AUDIT
+======================================================================
+
+Rank 1 — High impact
+Teleprompter endless 24ms loop
+File: MainActivity.kt -> TeleprompterOverlay()
+Fix: stop at max scroll.
+
+Rank 2 — Medium/high
+ContentResolver query/update/delete on main CameraX callback
+File: CameraController.finalizeRecording()
+Fix: P0 rewrite removes unnecessary manual finalization I/O.
+
+Rank 3 — Medium
+Feature state tied tightly to Composable lifetime
+Files: MainActivity.kt, GalleryScreen.kt, ScriptsScreen.kt
+Impact: recreation restarts work and makes long-lived operations harder to test.
+Fix: small ViewModels after P0/P1 stabilization.
+
+Rank 4 — Low current risk
+No expensive thumbnail decoding currently exists.
+If thumbnails are added later:
+- use MediaStore.loadThumbnail off-main
+- cache by media ID/URI
+- never decode full video frames during composition
+
+Startup:
+- no network SDK startup
+- no ads/analytics initialization
+- Room opens when Scripts is used
+- camera provider initializes in Capture
+Risk: low.
+
+Memory:
+- old huge bitmap/editor pipeline is gone
+- primary concerns are camera resource lifecycle and VideoView cleanup
+
+Battery:
+- no location polling
+- no WorkManager
+- no WakeLock
+- no background service
+- no network retry loop
+- teleprompter loop is the main avoidable wakeup
+
+======================================================================
+I. SECURITY & PRIVACY AUDIT
+======================================================================
+
+I-001 Modern permissions — GOOD
+Current manifest uses CAMERA and RECORD_AUDIO only.
+No INTERNET, location, Bluetooth, notification policy, or broad modern media permission.
+
+I-002 Legacy storage — HIGH compatibility concern
+Add READ/WRITE_EXTERNAL_STORAGE with maxSdkVersion=28 only.
+Do not add READ_MEDIA_VIDEO merely to fix old Android.
+
+I-003 Exported components — GOOD
+Only launcher MainActivity is exported.
+No service/receiver/provider attack surface in current manifest.
+
+I-004 Network security — not applicable currently
+No INTERNET permission and no network stack.
+Do not add network_security_config without a real network feature.
+
+I-005 Secrets — GOOD
+No active hardcoded API key/token/credential found in current Android source/config.
+.gitignore excludes local.properties, .env, *.jks, debug.keystore.
+Release passwords come from environment variables.
+
+I-006 Backup disclosure — MEDIUM
+Backup rules include script database / preferences while UI says scripts “stay on this device.”
+Recommended: keep system backup for user-authored scripts but change wording to disclose Android backup/device transfer.
+
+I-007 Script encryption — no action required by default
+Teleprompter scripts are app-sandboxed text. SQLCipher is not justified without a stronger threat model.
+
+I-008 Clipboard
+No sensitive clipboard workflow found.
+
+I-009 WebView / JavaScript
+None.
+
+I-010 FileProvider
+Not needed for MediaStore content URI sharing.
+
+I-011 Authentication/authorization
+Not applicable to current local-first app.
+
+======================================================================
+J. ARCHITECTURE & MAINTAINABILITY AUDIT
+======================================================================
+
+Current structure:
+- small single-module app
+- direct framework access from Composables
+
+Problems:
+CaptureScreen owns permission orchestration, capability state, CameraController lifecycle, recording state, mode, audio, teleprompter visibility.
+ScriptsScreen owns DB creation, DAO collection, mutation coroutines, dialogs.
+GalleryScreen owns MediaStore query/delete/share/player presentation.
+
+Desired incremental structure:
+
+app/
+  MainActivity.kt
+  DuoCamApp.kt
+
+camera/
+  CameraCapabilityManager.kt
+  CameraController.kt
+  CameraViewModel.kt
+  RecordingMediaStore.kt
+
+scripts/
+  ScriptsScreen.kt
+  ScriptsViewModel.kt
+  ScriptRepository.kt
+
+gallery/
+  GalleryScreen.kt
+  GalleryViewModel.kt
+  RecordingRepository.kt
+
+db/
+  Script.kt
+  Folder.kt
+  ScriptDao.kt
+  ScriptDatabase.kt
+
+Migration approach:
+1. fix P0/P1 without moving packages
+2. add RecordingMediaStore helper
+3. add ViewModels only where they solve lifecycle/testability
+4. move package namespace in isolated refactor later
+5. do not add DI framework yet
+6. do not split into feature Gradle modules yet
+
+Why not full Clean Architecture:
+Three small local features do not justify use-case/interface layers for every action.
+
+Why com.example should change eventually:
+The production app ID is real but namespace/package remains template-like and makes Room schema naming less professional.
+Do the migration only after tests are strong.
+
+======================================================================
+K. ACCESSIBILITY AUDIT
+======================================================================
+
+Good:
+- Material3 controls
+- important icon buttons generally have contentDescription
+- decorative icons often correctly use null descriptions
+- primary record action contains text
+- teleprompter contrast is strong
+
+Issues:
+K-001 High: fixed preview layout can break at large font sizes.
+K-002 Low: Pause icon semantics do not match Stop action.
+K-003 Low: Home icon semantics do not match Refresh action.
+K-004 No dynamic-font regression tests.
+K-005 No TalkBack traversal verification.
+K-006 Teleprompter would benefit from explicit slower/faster/reset actions.
+
+Required accessibility matrix:
+- fontScale 1.0
+- 1.3
+- 1.5
+- 2.0
+- TalkBack on
+- gesture navigation
+- 3-button navigation
+- 320dp/360dp widths
+- landscape
+- light/dark if both are retained
+
+======================================================================
+L. PRODUCT / FEATURE RECOMMENDATIONS
+======================================================================
+
+Problem solved:
+Creators want to record their scene/perspective and their own reaction/presentation simultaneously while optionally reading a script.
+
+Likely target users:
+- short-form creators
+- vloggers
+- educators
+- review/reaction creators
+- presenters
+- interview/social-content users
+
+Primary value proposition:
+“Record real front + back camera simultaneously on supported Android devices, with an integrated teleprompter.”
+
+Must Have:
+1. reliable single-camera recording
+2. reliable dual-camera recording on supported hardware
+3. honest fallback
+4. clear save/failure states
+5. teleprompter
+6. script persistence
+7. local gallery
+8. playback/share/delete
+9. capability-aware onboarding
+10. real device compatibility matrix
+
+High Value:
+1. camera/primary-side selection where supported
+2. teleprompter slower/faster/reset/font size
+3. gallery thumbnails
+4. remember selected script
+5. remember audio/mode preference
+6. basic verified quality selector
+
+Nice to Have:
+1. script folders after actual user need
+2. favorite scripts
+3. Media3 player
+4. one additional verified dual layout
+5. background recording only if demand is proven
+
+Avoid / unnecessary complexity for V1:
+1. full video editor
+2. fake or lightly implemented AI
+3. cloud backup before local workflow is excellent
+4. paywall before retention validation
+5. advanced transitions/effects
+6. fake stabilization/thermal dashboards
+7. too many dual layouts before one is reliable
+8. Hilt + multi-module Clean Architecture at current scale
+
+======================================================================
+M. DEPENDENCY & BUILD AUDIT
+======================================================================
+
+Current major versions:
+- AGP 9.1.1
+- Gradle 9.3.1
+- Kotlin 2.2.10
+- KSP 2.3.6
+- core-ktx 1.18.0
+- lifecycle-runtime-compose 2.8.7
+- activity-compose 1.10.1
+- Compose BOM 2024.09.00
+- Room 2.7.0
+- CameraX 1.5.3
+- Coroutines 1.10.2
+- Robolectric 4.16.1
+- Roborazzi 1.59.0
+
+CameraX 1.5.3:
+- current APIs compile
+- do not block P0 on an upgrade
+- upgrade later in isolation with physical device matrix
+
+Room 2.7.0:
+- simple current usage
+- upgrade later with schema/DAO tests
+
+Compose BOM:
+- old relative to 2026 ecosystem
+- upgrade in dedicated UI/tooling PR, not with camera fixes
+
+activity-compose:
+- older than current stable ecosystem
+- upgrade with controlled AndroidX modernization
+
+material-icons-extended:
+- convenient but can add size
+- only optimize if APK analysis shows meaningful gain
+
+Build positives:
+- wrapper committed
+- environment-based signing secrets
+- schema export configured
+- version catalog
+- CI through wrapper
+
+Build issues:
+- generic check/build task release-signing detector too broad
+- R8 disabled
+- signed release not verified
+- namespace still com.example
+
+R8 recommendation:
+Do not enable before P0/P1 runtime tests exist. Then enable minification/resource shrinking and smoke-test a signed release.
+
+======================================================================
+N. TESTING AUDIT
+======================================================================
+
+Current tests:
+- unit test(s) around simple domain/capability behavior
+- Robolectric app resource sanity
+- Roborazzi screenshot infrastructure
+- minimal instrumentation package test
+
+Critical missing tests:
+N-001 P0 RecordingMediaStore collection URI + values contract.
+N-002 P0 API28 legacy target contains no RELATIVE_PATH.
+N-003 P1 cameraReady false until bind success.
+N-004 P1 recording state machine idle -> recording -> finalizing -> saved/error.
+N-005 P1 dual bind failure -> single fallback.
+N-006 P1 ScriptDao insert/update/delete.
+N-007 P1 script delete confirmation UI.
+N-008 P2 Gallery provider exception -> error state.
+N-009 P1 denied camera still allows Scripts/Gallery.
+N-010 P1 recording locks navigation.
+N-011 P2 teleprompter stops at end.
+N-012 P0/P1 real device 5-second recording verifies URI, size, duration, playback.
+
+Testing principle:
+Protect media output, state transitions, hardware fallback, user-authored data, destructive actions, and permissions. Do not chase an arbitrary coverage percentage.
+
+======================================================================
+O. PLAY STORE / DEPLOYMENT READINESS
+======================================================================
+
+Target SDK: PASS
+- targetSdk 36
+- satisfies Play target requirement effective 2026-08-31 for new apps/updates
+
+Application ID:
+- com.duocam.dual.camera.recorder — acceptable
+
+Namespace:
+- com.example — should be migrated later
+
+Version:
+- versionCode 1 / versionName 1.0
+- only valid if Play Console history has no higher code
+
+Signing:
+- configuration exists
+- signed release not verified
+Status: NOT TESTED
+
+AAB: NOT TESTED
+R8: disabled
+Adaptive/monochrome icon: present
+Privacy policy hosted URL: not present in repo
+Data Safety: owner must complete based on actual behavior
+
+Play policy/product communication:
+Store listing must not imply every device supports dual-camera recording. Use “supported devices” language.
+
+Release blockers:
+1. CAM-01
+2. STO-01
+3. real-device recording verification
+4. lifecycle/navigation fix
+5. signed release AAB verification
+6. final privacy policy and Data Safety
+
+======================================================================
+P. MASTER PRIORITY BACKLOG
+======================================================================
+
+| ID      | Priority | Area            | Issue                                      | Files                              | User Impact                          | Effort | Dependency |
+|---------|----------|-----------------|--------------------------------------------|------------------------------------|--------------------------------------|--------|------------|
+| CAM-01  | P0       | Recording       | Item URI passed as collection URI          | CameraController.kt                | Core recording can fail              | M      | none       |
+| STO-01  | P0       | Compatibility   | API24-28 storage permissions missing       | Manifest/Main/Gallery/Camera       | Old Android recording/gallery broken | M      | none       |
+| CAM-02  | P1       | Camera state    | Recorder assigned before bind success      | CameraController.kt                | Invalid start state                  | S      | CAM-01     |
+| NAV-01  | P1       | Lifecycle       | Navigation allowed during recording        | MainActivity/CameraController      | Unexpected recording stop            | M      | CAM-01     |
+| PERM-01 | P1       | UX              | Camera permission blocks whole app         | MainActivity.kt                    | Scripts/gallery inaccessible         | M      | none       |
+| PERM-02 | P1       | UX              | Permission stale after Settings            | MainActivity.kt                    | User may remain blocked              | S      | PERM-01    |
+| SCR-01  | P1       | Data safety     | No script delete confirmation              | ScriptsScreen.kt                   | Accidental content loss              | S      | none       |
+| UI-01   | P1       | Responsive UI   | Fixed tall preview clips controls          | MainActivity.kt                    | Record CTA can be inaccessible       | M      | none       |
+| BLD-01  | P1       | Build           | check can require release signing          | app/build.gradle.kts               | Validation workflow friction         | S      | none       |
+| TEL-01  | P2       | Performance     | Auto-scroll loops at end                   | MainActivity.kt                    | Battery/CPU wakeups                  | S      | none       |
+| CAM-03  | P2       | Performance     | Main-thread provider finalization          | CameraController.kt                | Save jank                            | S      | CAM-01     |
+| STATE-1 | P2       | State           | Selected script not restored               | MainActivity.kt                    | Teleprompter selection lost          | S      | none       |
+| UI-02   | P2       | Insets          | Duplicate system-bar padding               | Main/Gallery                       | Uneven spacing                       | S      | none       |
+| GAL-01  | P2       | Reliability     | Provider/delete/share errors weak          | GalleryScreen.kt                   | Failure ambiguity                    | M      | STO-01     |
+| PRIV-01 | P2       | Privacy         | Local wording vs system backup             | Scripts/backup XML                 | Misleading privacy copy              | S      | none       |
+| LOC-01  | P2       | Maintainability | Hardcoded strings                          | Main/Gallery/Scripts               | Localization/QA friction             | M      | UI-01      |
+| META-01 | P2       | Metadata        | Stale Gemini capability                    | metadata.json                      | Misleading metadata                  | S      | none       |
+| ARC-01  | P2       | Architecture    | Framework logic inside composables         | Main/Gallery/Scripts               | Test/lifecycle complexity            | L      | P0/P1 done |
+| PKG-01  | P2       | Packaging       | namespace/package is com.example           | Gradle/source/schema/tests         | Production maintainability           | M      | tests      |
+| DEP-01  | P2       | Dependencies    | aging AndroidX/Room/Compose/CameraX set     | version catalog                    | Long-term maintenance                | M/L    | device tests|
+| A11Y-01 | P2       | Accessibility   | large-font/device matrix absent            | UI/tests                           | Usability                            | M      | UI-01      |
+| GAL-02  | P3       | UI              | Home icon used for Refresh                 | GalleryScreen.kt                   | Minor confusion                      | S      | none       |
+| CAM-04  | P3       | UI              | Pause icon used for Stop                   | MainActivity.kt                    | Minor semantic mismatch              | S      | none       |
+| DOM-01  | P3       | Cleanup         | dormant folder/favorite/theme surface      | db/theme                           | Code clutter                         | S/M    | V1 feedback|
+
+======================================================================
+Q. IMPLEMENTATION ROADMAP
+======================================================================
+
+Phase 0 — Restore real recording correctness
+Goal: make media saving correct before polish.
+Changes:
+- RecordingMediaStore helper
+- correct collection URI + ContentValues
+- remove manual pre-insert
+- assign recorder after bind success
+- cameraReady
+- API<=28 permissions
+- regression tests
+Completion: saved single video is valid/playable; old Android path behaves correctly.
+
+Phase 1 — Recording lifecycle + permission UX
+Changes:
+- camera permission only gates Capture
+- permission refresh on resume
+- disable non-Capture navigation while recording/finalizing
+- wait for Finalize before unbind
+- flexible preview/control layout
+- correct Stop icon
+
+Phase 2 — User data + gallery reliability
+Changes:
+- script delete confirmation
+- lifecycle-aware Room collection
+- DB mutation errors
+- robust MediaStore errors
+- playback cleanup
+- Refresh icon
+- accurate backup wording
+
+Phase 3 — UI/accessibility/insets
+Changes:
+- enableEdgeToEdge
+- single inset strategy
+- strings resources
+- font-scale tests
+- teleprompter slower/faster/reset/font size
+
+Phase 4 — Lightweight architecture extraction
+Changes:
+- small Camera/Scripts/Gallery ViewModels
+- small concrete repositories
+- no Hilt yet
+
+Phase 5 — Testing + real device matrix
+Changes:
+- output target tests
+- DAO tests
+- permission/navigation UI tests
+- supported/unsupported dual-camera physical devices
+
+Phase 6 — Controlled dependency modernization
+Order:
+1. Activity/core/lifecycle
+2. Room
+3. Compose BOM
+4. CameraX last and isolated
+
+Phase 7 — Release hardening
+Changes:
+- signing task detector fix
+- production namespace migration
+- R8/resource shrinking after tests
+- signed bundleRelease
+- privacy policy/Data Safety
+- Play internal testing
+
+======================================================================
+R. EXACT CODE IMPLEMENTATION
+======================================================================
+
+R1. FILE
+app/src/main/java/com/example/camera/RecordingMediaStore.kt
+
+ACTION
+CREATE
+
+WHY
+CameraX requires a collection URI + ContentValues. This isolates that contract and makes it testable.
+
+CODE
+----------------------------------------------------------------------
+package com.example.camera
+
+import android.content.ContentValues
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+
+internal data class RecordingTarget(
+    val collectionUri: Uri,
+    val contentValues: ContentValues,
+)
+
+internal object RecordingMediaStore {
+
+    fun createTarget(
+        mode: CaptureMode,
+        timestampMs: Long = System.currentTimeMillis(),
+        sdkInt: Int = Build.VERSION.SDK_INT,
+    ): RecordingTarget {
+        val contentValues = ContentValues().apply {
+            put(
+                MediaStore.Video.Media.DISPLAY_NAME,
+                "DuoCam_${timestampMs}_${mode.name.lowercase()}.mp4",
+            )
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.DATE_ADDED, timestampMs / 1000L)
+
+            if (sdkInt >= Build.VERSION_CODES.Q) {
+                put(
+                    MediaStore.Video.Media.RELATIVE_PATH,
+                    "Movies/DuoCam",
+                )
+            }
+        }
+
+        val collectionUri =
+            if (sdkInt >= Build.VERSION_CODES.Q) {
+                MediaStore.Video.Media.getContentUri(
+                    MediaStore.VOLUME_EXTERNAL_PRIMARY,
+                )
+            } else {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+
+        return RecordingTarget(
+            collectionUri = collectionUri,
+            contentValues = contentValues,
+        )
+    }
+}
+
+HOW TO TEST
+- run unit test in R9
+- verify modern target contains RELATIVE_PATH
+- verify API28 target uses EXTERNAL_CONTENT_URI without RELATIVE_PATH
+
+SUCCESS
+CameraX receives a collection URI and creates the media row itself.
+
+----------------------------------------------------------------------
+R2. FILE
+app/src/main/java/com/example/camera/CameraController.kt
+
+ACTION
+REPLACE
+
+WHY
+Fixes P0 output contract, recorder readiness, release/finalization race, and unnecessary manual MediaStore finalization.
+
+CODE
+----------------------------------------------------------------------
+package com.example.camera
+
+import android.Manifest
+import android.content.ContentResolver
+import android.content.Context
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.util.Log
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.CompositionSettings
+import androidx.camera.core.ConcurrentCamera.SingleCameraConfig
+import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
+import java.util.concurrent.Executor
+
+enum class CaptureMode {
+    SINGLE,
+    DUAL,
+}
+
+data class RecordingUiState(
+    val isRecording: Boolean = false,
+    val isFinalizing: Boolean = false,
+    val durationMs: Long = 0L,
+    val savedUri: Uri? = null,
+    val errorMessage: String? = null,
+)
+
+class CameraController(
+    context: Context,
+    private val lifecycleOwner: LifecycleOwner,
+    private val previewView: PreviewView,
+    private val onRecordingStateChanged: (RecordingUiState) -> Unit,
+    private val onModeChanged: (CaptureMode, String?) -> Unit,
+    private val onCameraReadyChanged: (Boolean) -> Unit,
+) {
+    private val appContext = context.applicationContext
+    private val contentResolver: ContentResolver = appContext.contentResolver
+    private val mainExecutor: Executor = ContextCompat.getMainExecutor(appContext)
+
+    private val providerFuture = ProcessCameraProvider.getInstance(appContext)
+
+    private var provider: ProcessCameraProvider? = null
+    private var recorder: Recorder? = null
+    private var activeRecording: Recording? = null
+    private var bindGeneration = 0
+    private var released = false
+    private var actualMode = CaptureMode.SINGLE
+    private var lastDurationMs = 0L
+
+    fun bind(
+        capabilities: CameraCapabilities,
+        requestedMode: CaptureMode,
+    ) {
+        if (released || activeRecording != null) return
+
+        val generation = ++bindGeneration
+        recorder = null
+        emitCameraReady(false)
+
+        providerFuture.addListener(
+            {
+                if (released || generation != bindGeneration) {
+                    return@addListener
+                }
+
+                try {
+                    val cameraProvider = providerFuture.get()
+                    provider = cameraProvider
+                    bindWithProvider(
+                        cameraProvider = cameraProvider,
+                        capabilities = capabilities,
+                        requestedMode = requestedMode,
+                    )
+                } catch (error: Throwable) {
+                    Log.e(TAG, "Camera provider initialization failed.", error)
+                    onModeChangedIfActive(
+                        CaptureMode.SINGLE,
+                        error.message ?: "Camera initialization failed.",
+                    )
+                    emitState(
+                        RecordingUiState(
+                            errorMessage = "Camera initialization failed.",
+                        ),
+                    )
+                }
+            },
+            mainExecutor,
+        )
+    }
+
+    private fun bindWithProvider(
+        cameraProvider: ProcessCameraProvider,
+        capabilities: CameraCapabilities,
+        requestedMode: CaptureMode,
+    ) {
+        cameraProvider.unbindAll()
+        recorder = null
+        emitCameraReady(false)
+
+        val preview = Preview.Builder()
+            .build()
+            .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+
+        val qualitySelector = QualitySelector.fromOrderedList(
+            listOf(Quality.HD, Quality.SD),
+            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+        )
+
+        val newRecorder = Recorder.Builder()
+            .setQualitySelector(qualitySelector)
+            .build()
+
+        val videoCapture = VideoCapture.withOutput(newRecorder)
+        val selectors = capabilities.concurrentCameraSelectors
+
+        if (requestedMode == CaptureMode.DUAL && selectors != null) {
+            try {
+                val sharedGroup = UseCaseGroup.Builder()
+                    .addUseCase(preview)
+                    .addUseCase(videoCapture)
+                    .build()
+
+                val fullFrame = CompositionSettings.Builder()
+                    .setAlpha(1f)
+                    .setOffset(0f, 0f)
+                    .setScale(1f, 1f)
+                    .build()
+
+                val pictureInPicture = CompositionSettings.Builder()
+                    .setAlpha(1f)
+                    .setOffset(0.62f, -0.62f)
+                    .setScale(0.34f, 0.34f)
+                    .build()
+
+                cameraProvider.bindToLifecycle(
+                    listOf(
+                        SingleCameraConfig(
+                            selectors.first,
+                            sharedGroup,
+                            fullFrame,
+                            lifecycleOwner,
+                        ),
+                        SingleCameraConfig(
+                            selectors.second,
+                            sharedGroup,
+                            pictureInPicture,
+                            lifecycleOwner,
+                        ),
+                    ),
+                )
+
+                recorder = newRecorder
+                actualMode = CaptureMode.DUAL
+                emitCameraReady(true)
+                onModeChangedIfActive(
+                    CaptureMode.DUAL,
+                    "Dual-camera picture-in-picture recording is active.",
+                )
+                return
+            } catch (error: Throwable) {
+                Log.e(TAG, "Concurrent bind failed; using single camera.", error)
+                cameraProvider.unbindAll()
+                onModeChangedIfActive(
+                    CaptureMode.SINGLE,
+                    "Dual-camera recording is unavailable right now; " +
+                        "single-camera recording is ready.",
+                )
+            }
+        }
+
+        val selector = capabilities.backCameraSelector
+            ?: capabilities.frontCameraSelector
+            ?: CameraSelector.DEFAULT_BACK_CAMERA
+
+        try {
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                selector,
+                preview,
+                videoCapture,
+            )
+
+            recorder = newRecorder
+            actualMode = CaptureMode.SINGLE
+            emitCameraReady(true)
+            onModeChangedIfActive(CaptureMode.SINGLE, null)
+        } catch (error: Throwable) {
+            recorder = null
+            emitCameraReady(false)
+            Log.e(TAG, "Single camera binding failed.", error)
+            onModeChangedIfActive(CaptureMode.SINGLE, "Camera unavailable.")
+            emitState(
+                RecordingUiState(
+                    errorMessage = "Camera unavailable: " +
+                        (error.message ?: "unknown error"),
+                ),
+            )
+        }
+    }
+
+    fun startRecording(audioRequested: Boolean) {
+        if (released) return
+
+        val currentRecorder = recorder ?: run {
+            publishError("Camera is not ready yet.")
+            return
+        }
+
+        if (activeRecording != null) return
+
+        val target = RecordingMediaStore.createTarget(actualMode)
+
+        val outputOptions = MediaStoreOutputOptions.Builder(
+            contentResolver,
+            target.collectionUri,
+        )
+            .setContentValues(target.contentValues)
+            .build()
+
+        val pendingRecording = try {
+            var pending = currentRecorder.prepareRecording(
+                appContext,
+                outputOptions,
+            )
+
+            val audioAllowed = audioRequested &&
+                ContextCompat.checkSelfPermission(
+                    appContext,
+                    Manifest.permission.RECORD_AUDIO,
+                ) == PackageManager.PERMISSION_GRANTED
+
+            if (audioAllowed) {
+                pending = pending.withAudioEnabled()
+            }
+
+            pending
+        } catch (error: Throwable) {
+            Log.e(TAG, "Unable to prepare recording.", error)
+            publishError(error.message ?: "Unable to prepare recording.")
+            return
+        }
+
+        lastDurationMs = 0L
+        emitState(RecordingUiState())
+
+        try {
+            activeRecording = pendingRecording.start(mainExecutor) { event ->
+                when (event) {
+                    is VideoRecordEvent.Start -> {
+                        emitState(
+                            RecordingUiState(
+                                isRecording = true,
+                                durationMs = lastDurationMs,
+                            ),
+                        )
+                    }
+
+                    is VideoRecordEvent.Status -> {
+                        lastDurationMs = event.recordingStats.recordedDurationNanos /
+                            NANOS_PER_MILLISECOND
+                        emitState(
+                            RecordingUiState(
+                                isRecording = true,
+                                durationMs = lastDurationMs,
+                            ),
+                        )
+                    }
+
+                    is VideoRecordEvent.Finalize -> finalizeRecording(event)
+                }
+            }
+        } catch (error: Throwable) {
+            activeRecording = null
+            Log.e(TAG, "Unable to start recording.", error)
+            publishError(error.message ?: "Unable to start recording.")
+        }
+    }
+
+    fun stopRecording() {
+        val recording = activeRecording ?: return
+        emitState(
+            RecordingUiState(
+                isFinalizing = true,
+                durationMs = lastDurationMs,
+            ),
+        )
+        recording.stop()
+    }
+
+    fun cancelRecording() {
+        activeRecording?.close()
+    }
+
+    fun release() {
+        if (released) return
+        released = true
+        ++bindGeneration
+        recorder = null
+
+        if (activeRecording != null) {
+            activeRecording?.stop()
+        } else {
+            completeRelease()
+        }
+    }
+
+    private fun finalizeRecording(event: VideoRecordEvent.Finalize) {
+        val outputUri = event.outputResults.outputUri
+        activeRecording = null
+
+        if (!released) {
+            if (event.hasError() || outputUri == Uri.EMPTY) {
+                publishError(
+                    event.cause?.message
+                        ?: "The recording could not be finalized. No video was saved.",
+                )
+            } else {
+                emitState(
+                    RecordingUiState(
+                        savedUri = outputUri,
+                        durationMs = event.recordingStats.recordedDurationNanos /
+                            NANOS_PER_MILLISECOND,
+                    ),
+                )
+            }
+        }
+
+        if (released) {
+            completeRelease()
+        }
+    }
+
+    private fun completeRelease() {
+        runCatching { provider?.unbindAll() }
+            .onFailure { Log.w(TAG, "Camera unbind during release failed.", it) }
+
+        provider = null
+        recorder = null
+    }
+
+    private fun publishError(message: String) {
+        emitState(RecordingUiState(errorMessage = message))
+    }
+
+    private fun emitState(state: RecordingUiState) {
+        if (!released) onRecordingStateChanged(state)
+    }
+
+    private fun emitCameraReady(ready: Boolean) {
+        if (!released) onCameraReadyChanged(ready)
+    }
+
+    private fun onModeChangedIfActive(
+        mode: CaptureMode,
+        message: String?,
+    ) {
+        if (!released) onModeChanged(mode, message)
+    }
+
+    companion object {
+        private const val TAG = "DuoCamCameraController"
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
+    }
+}
+
+HOW TO TEST
+- ./gradlew testDebugUnitTest
+- ./gradlew assembleDebug
+- ./gradlew lintDebug
+- physical modern device: 5s single capture, stop, play saved output
+- supported device: 5s dual capture, verify both feeds in saved video
+
+SUCCESS
+- no manual pre-created MediaStore row
+- Finalize returns real item URI
+- record starts only after successful bind
+- release waits for Finalize before unbind when recording is active
+
+----------------------------------------------------------------------
+R3. FILE
+app/src/main/AndroidManifest.xml
+
+ACTION
+REPLACE
+
+CODE
+----------------------------------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="true" />
+
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyApplication">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MyApplication">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+    </application>
+
+</manifest>
+
+TEST
+- API28: request legacy storage contextually and record/query gallery
+- API29+: no legacy storage dialog
+
+----------------------------------------------------------------------
+R4. FILE
+app/src/main/java/com/example/MainActivity.kt
+
+ACTION
+MODIFY LARGE FILE
+
+WHY
+Fixes permission scope, stale permission state, recording navigation lifecycle, camera-ready state, old-Android storage request, layout clipping, teleprompter polling, and Stop icon semantics.
+
+PATCH SET
+----------------------------------------------------------------------
+
+A. IMPORTS
+ADD:
+import android.os.Build
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Stop
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.db.ScriptDatabase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+REMOVE deprecated:
+import androidx.compose.ui.platform.LocalLifecycleOwner
+
+B. MainActivity.onCreate()
+REPLACE WITH:
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            MyApplicationTheme {
+                DuoCamApp()
+            }
+        }
+    }
+}
+
+C. DuoCamApp permission/navigation pattern
+Use camera permission as Capture-only concern.
+Use lifecycle observer to refresh CAMERA on ON_RESUME.
+Store selectedScriptId rather than Script object for restoration.
+Disable non-Capture NavigationBarItem while recordingBusy.
+
+Core lifecycle snippet:
+
+DisposableEffect(lifecycleOwner, context) {
+    val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+            cameraPermissionGranted = hasPermission(
+                context,
+                Manifest.permission.CAMERA,
+            )
+        }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+        lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+}
+
+D. Selected script persistence
+
+var selectedScriptId by rememberSaveable { mutableStateOf<Long?>(null) }
+var selectedScript by remember { mutableStateOf<Script?>(null) }
+val database = remember(context) { ScriptDatabase.getDatabase(context) }
+
+LaunchedEffect(selectedScriptId) {
+    selectedScript = selectedScriptId?.let { id ->
+        withContext(Dispatchers.IO) {
+            database.scriptDao().getScriptById(id)
+        }
+    }
+}
+
+When user chooses script:
+selectedScriptId = script.id
+selectedTab = AppTab.Capture.name
+
+E. CameraController construction
+Add cameraReady state:
+
+var cameraReady by remember { mutableStateOf(false) }
+
+val controller = remember(previewView, lifecycleOwner) {
+    CameraController(
+        context = context,
+        lifecycleOwner = lifecycleOwner,
+        previewView = previewView,
+        onRecordingStateChanged = { recordingState = it },
+        onModeChanged = { mode, message ->
+            actualMode = mode
+            modeMessage = message
+        },
+        onCameraReadyChanged = { ready ->
+            cameraReady = ready
+        },
+    )
+}
+
+F. Contextual recording permission launcher
+
+val recordingPermissionLauncher = rememberLauncherForActivityResult(
+    ActivityResultContracts.RequestMultiplePermissions(),
+) { results ->
+    val legacyStorageRequired = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+    val legacyStorageGranted =
+        !legacyStorageRequired ||
+            results[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true ||
+            hasPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+
+    if (!legacyStorageGranted) {
+        recordingState = RecordingUiState(
+            errorMessage = "Storage permission is required to save video on this Android version.",
+        )
+        return@rememberLauncherForActivityResult
+    }
+
+    val microphoneGranted =
+        !audioEnabled ||
+            results[Manifest.permission.RECORD_AUDIO] == true ||
+            hasPermission(context, Manifest.permission.RECORD_AUDIO)
+
+    if (audioEnabled && !microphoneGranted) {
+        audioEnabled = false
+    }
+
+    controller.startRecording(
+        audioRequested = audioEnabled && microphoneGranted,
+    )
+}
+
+When starting:
+
+val requiredPermissions = buildList {
+    if (audioEnabled && !hasPermission(context, Manifest.permission.RECORD_AUDIO)) {
+        add(Manifest.permission.RECORD_AUDIO)
+    }
+
+    if (
+        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+        !hasPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    ) {
+        add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
+}
+
+if (requiredPermissions.isNotEmpty()) {
+    recordingPermissionLauncher.launch(requiredPermissions.toTypedArray())
+} else {
+    controller.startRecording(audioRequested = audioEnabled)
+}
+
+G. Record button readiness
+Enabled must include:
+cameraReady && !recordingState.isFinalizing
+
+H. Navigation lock
+
+val isBusy = recordingState.isRecording || recordingState.isFinalizing
+LaunchedEffect(isBusy) {
+    onRecordingBusyChanged(isBusy)
+}
+
+Disable Scripts/Gallery NavigationBarItem while recordingBusy.
+
+I. Preview sizing
+Replace fixed .aspectRatio(9f / 16f) with:
+
+Modifier
+    .fillMaxWidth()
+    .weight(1f)
+    .heightIn(min = 180.dp)
+    .background(Color.Black)
+
+Put controls in a bounded scrollable Column so Start/Stop remains reachable.
+
+J. Stop icon
+Use Icons.Default.Stop, not Icons.Default.Pause.
+
+K. Insets
+Use Scaffold padding once; remove duplicate statusBarsPadding/navigationBarsPadding where redundant.
+
+L. Teleprompter loop
+
+LaunchedEffect(script.id) {
+    scrollState.scrollTo(0)
+}
+
+LaunchedEffect(scrolling, speed, script.id) {
+    while (scrolling && scrollState.value < scrollState.maxValue) {
+        val consumed = scrollState.scrollBy(speed)
+        if (consumed == 0f && scrollState.value >= scrollState.maxValue) break
+        delay(24L)
+    }
+
+    if (scrollState.value >= scrollState.maxValue) {
+        scrolling = false
+    }
+}
+
+HOW TO TEST
+1. deny camera -> Scripts/Gallery still open
+2. enable camera in Settings -> return -> Capture updates
+3. record -> Scripts/Gallery disabled
+4. stop -> Saving -> nav re-enabled after Finalize
+5. API28 -> storage permission requested only there
+6. fontScale 2.0 -> record CTA reachable
+
+----------------------------------------------------------------------
+R5. FILE
+app/src/main/java/com/example/GalleryScreen.kt
+
+ACTION
+MODIFY
+
+PATCHES
+----------------------------------------------------------------------
+1. Replace Home icon import/use with Refresh.
+2. On API<=28 request READ_EXTERNAL_STORAGE before gallery query.
+3. Wrap query in runCatching on Dispatchers.IO.
+4. Wrap delete in runCatching and map failure to message.
+5. Wrap share activity launch in runCatching.
+6. Stop VideoView in DisposableEffect.
+7. Remove duplicate status bar padding if Scaffold owns insets.
+
+Recommended share helper:
+
+private fun shareRecording(
+    context: Context,
+    recording: RecordingItem,
+): Result<Unit> {
+    return runCatching {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = recording.mimeType
+            putExtra(Intent.EXTRA_STREAM, recording.uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        context.startActivity(
+            Intent.createChooser(intent, "Share recording"),
+        )
+    }
+}
+
+Recommended refresh pattern:
+
+fun refresh() {
+    scope.launch {
+        loading = true
+        message = null
+
+        val result = withContext(Dispatchers.IO) {
+            runCatching { queryOwnedRecordings(context) }
+        }
+
+        result.onSuccess { recordings = it }
+            .onFailure {
+                recordings = emptyList()
+                message = it.message ?: "The local gallery could not be loaded."
+            }
+
+        loading = false
+    }
+}
+
+Recommended VideoView cleanup:
+
+val videoView = remember(recording.uri) {
+    VideoView(context).apply {
+        setMediaController(MediaController(context))
+        setVideoURI(recording.uri)
+        setOnPreparedListener { start() }
+    }
+}
+
+DisposableEffect(videoView) {
+    onDispose { videoView.stopPlayback() }
+}
+
+----------------------------------------------------------------------
+R6. FILE
+app/src/main/java/com/example/ScriptsScreen.kt
+
+ACTION
+MODIFY
+
+PATCHES
+----------------------------------------------------------------------
+1. Replace collectAsState(initial=...) with collectAsStateWithLifecycle(initialValue=...).
+2. Add pendingDelete: Script?.
+3. Add operationError: String?.
+4. Delete button sets pendingDelete rather than deleting immediately.
+5. Add AlertDialog confirmation.
+6. Wrap save/delete DAO operations in runCatching on Dispatchers.IO.
+7. Update privacy copy.
+
+Recommended privacy wording:
+“Scripts are stored locally and can be displayed over a real camera recording. Android system backup or device transfer may include them when backup is enabled.”
+
+Delete confirmation pattern:
+
+pendingDelete?.let { script ->
+    AlertDialog(
+        onDismissRequest = { pendingDelete = null },
+        title = { Text("Delete script?") },
+        text = {
+            Text(
+                "Delete \"${script.title}\" permanently? This action cannot be undone.",
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    pendingDelete = null
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { database.scriptDao().deleteScript(script) }
+                        }
+                        result.onFailure {
+                            operationError = it.message ?: "The script could not be deleted."
+                        }
+                    }
+                },
+            ) { Text("Delete") }
+        },
+        dismissButton = {
+            TextButton(onClick = { pendingDelete = null }) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+----------------------------------------------------------------------
+R7. FILE
+app/build.gradle.kts
+
+ACTION
+MODIFY
+
+WHY
+Generic check/test/lint tasks should not require an upload keystore.
+
+REPLACE release task detector with:
+
+val signedReleaseRequested =
+    gradle.startParameter.taskNames.any { requestedTask ->
+        val taskName = requestedTask.substringAfterLast(':').lowercase()
+
+        taskName == "assemblerelease" ||
+            taskName == "bundlerelease" ||
+            (taskName.startsWith("publish") && taskName.contains("release"))
+    }
+
+Then replace:
+if (!releaseCredentialsAvailable && releaseBuildRequested)
+with:
+if (!releaseCredentialsAvailable && signedReleaseRequested)
+
+TEST
+- without credentials: ./gradlew check -> should run
+- without credentials: ./gradlew bundleRelease -> clear signing error
+- with credentials: ./gradlew bundleRelease -> signed AAB
+
+----------------------------------------------------------------------
+R8. FILE
+metadata.json
+
+ACTION
+REPLACE
+
+CODE
+----------------------------------------------------------------------
+{
+  "name": "DuoCam",
+  "description": "DuoCam: real front and back camera recording on supported Android devices with a local teleprompter and gallery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
+
+----------------------------------------------------------------------
+R9. FILE
+app/src/test/java/com/example/camera/RecordingMediaStoreTest.kt
+
+ACTION
+CREATE
+
+CODE
+----------------------------------------------------------------------
+package com.example.camera
+
+import android.os.Build
+import android.provider.MediaStore
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+@RunWith(RobolectricTestRunner::class)
+class RecordingMediaStoreTest {
+
+    @Test
+    fun api36_usesPrimaryVideoCollectionAndRelativePath() {
+        val target = RecordingMediaStore.createTarget(
+            mode = CaptureMode.DUAL,
+            timestampMs = 1_700_000_000_000L,
+            sdkInt = 36,
+        )
+
+        assertEquals(
+            MediaStore.Video.Media.getContentUri(
+                MediaStore.VOLUME_EXTERNAL_PRIMARY,
+            ),
+            target.collectionUri,
+        )
+
+        assertEquals(
+            "DuoCam_1700000000000_dual.mp4",
+            target.contentValues.getAsString(
+                MediaStore.Video.Media.DISPLAY_NAME,
+            ),
+        )
+
+        assertEquals(
+            "Movies/DuoCam",
+            target.contentValues.getAsString(
+                MediaStore.Video.Media.RELATIVE_PATH,
+            ),
+        )
+    }
+
+    @Test
+    fun api28_usesLegacyVideoCollectionWithoutRelativePath() {
+        val target = RecordingMediaStore.createTarget(
+            mode = CaptureMode.SINGLE,
+            timestampMs = 1_700_000_000_000L,
+            sdkInt = Build.VERSION_CODES.P,
+        )
+
+        assertEquals(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            target.collectionUri,
+        )
+
+        assertFalse(
+            target.contentValues.containsKey(
+                MediaStore.Video.Media.RELATIVE_PATH,
+            ),
+        )
+
+        assertNull(
+            target.contentValues.getAsString(
+                MediaStore.Video.Media.RELATIVE_PATH,
+            ),
+        )
+    }
+}
+
+----------------------------------------------------------------------
+R10. FILE
+app/src/test/java/com/example/db/ScriptDatabaseTest.kt
+
+ACTION
+CREATE
+
+CODE
+----------------------------------------------------------------------
+package com.example.db
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+@RunWith(RobolectricTestRunner::class)
+class ScriptDatabaseTest {
+
+    private lateinit var database: ScriptDatabase
+    private lateinit var dao: ScriptDao
+
+    @Before
+    fun setUp() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(
+            context,
+            ScriptDatabase::class.java,
+        )
+            .allowMainThreadQueries()
+            .build()
+        dao = database.scriptDao()
+    }
+
+    @After
+    fun tearDown() {
+        database.close()
+    }
+
+    @Test
+    fun insertUpdateAndDeleteScript_preservesExpectedState() = runTest {
+        val id = dao.insertScript(
+            Script(
+                title = "Intro",
+                content = "Welcome to DuoCam.",
+            ),
+        )
+
+        var scripts = dao.getAllScripts().first()
+        assertEquals(1, scripts.size)
+        assertEquals("Intro", scripts.first().title)
+
+        val updated = scripts.first().copy(
+            title = "Updated intro",
+            content = "Updated content.",
+        )
+
+        dao.updateScript(updated)
+
+        scripts = dao.getAllScripts().first()
+        assertEquals("Updated intro", scripts.first().title)
+
+        dao.deleteScript(scripts.first())
+        assertTrue(dao.getAllScripts().first().isEmpty())
+        assertTrue(id > 0L)
+    }
+}
+
+----------------------------------------------------------------------
+R11. FILE
+app/src/main/res/values/strings.xml
+
+ACTION
+MODIFY AFTER P0/P1
+
+INITIAL CENTRAL RESOURCE SET
+----------------------------------------------------------------------
+<resources>
+    <string name="app_name">DuoCam</string>
+    <string name="tab_capture">Capture</string>
+    <string name="tab_scripts">Scripts</string>
+    <string name="tab_gallery">Gallery</string>
+    <string name="start_recording">Start recording</string>
+    <string name="stop_recording">Stop recording</string>
+    <string name="saving">Saving…</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="gallery_refresh">Refresh gallery</string>
+    <string name="share">Share</string>
+    <string name="close">Close</string>
+</resources>
+
+Then mechanically migrate the remaining user-visible literals using stringResource().
+
+----------------------------------------------------------------------
+R12. LIGHTWEIGHT ARCHITECTURE EXTRACTION — PHASE 4
+----------------------------------------------------------------------
+
+CREATE:
+app/src/main/java/com/example/scripts/ScriptRepository.kt
+
+CODE:
+package com.example.scripts
+
+import com.example.db.Script
+import com.example.db.ScriptDao
+import kotlinx.coroutines.flow.Flow
+
+internal class ScriptRepository(
+    private val dao: ScriptDao,
+) {
+    val scripts: Flow<List<Script>>
+        get() = dao.getAllScripts()
+
+    suspend fun getById(id: Long): Script? = dao.getScriptById(id)
+
+    suspend fun save(
+        existing: Script?,
+        title: String,
+        content: String,
+    ) {
+        if (existing == null) {
+            dao.insertScript(
+                Script(title = title, content = content),
+            )
+        } else {
+            dao.updateScript(
+                existing.copy(
+                    title = title,
+                    content = content,
+                    timestamp = System.currentTimeMillis(),
+                ),
+            )
+        }
+    }
+
+    suspend fun delete(script: Script) {
+        dao.deleteScript(script)
+    }
+}
+
+CREATE later:
+app/src/main/java/com/example/gallery/RecordingRepository.kt
+
+Move MediaStore query/delete logic out of GalleryScreen. Keep the repository concrete; do not add interfaces solely for abstraction.
+
+----------------------------------------------------------------------
+R13. PACKAGE / NAMESPACE MIGRATION — PHASE 7
+----------------------------------------------------------------------
+
+CURRENT:
+namespace = "com.example"
+source package = com.example
+
+TARGET:
+namespace = "com.duocam.recorder"
+
+Keep applicationId:
+com.duocam.dual.camera.recorder
+
+Do the migration only after P0/P1 tests pass.
+Update source imports/tests and Room schema path.
+Do NOT rename the Room DB file or tables during this migration.
+Verify an upgrade install preserves existing scripts.
+
+----------------------------------------------------------------------
+R14. RELEASE MINIFICATION — PHASE 7
+----------------------------------------------------------------------
+
+ONLY AFTER runtime/device tests pass.
+
+In release build:
+isMinifyEnabled = true
+isShrinkResources = true
+
+Keep optimized default ProGuard file.
+Do not add blanket keep-all rules.
+
+Build and smoke-test:
+./gradlew bundleRelease
+
+----------------------------------------------------------------------
+R15. DEPENDENCY MODERNIZATION
+----------------------------------------------------------------------
+
+Do not apply one blind version-catalog update.
+
+PR A:
+- Activity/core/lifecycle
+
+PR B:
+- Room + schema tests
+
+PR C:
+- Compose BOM + screenshot review
+
+PR D:
+- CameraX LAST + physical single/dual device matrix
+
+======================================================================
+IMPLEMENTATION VERIFICATION MATRIX
+======================================================================
+
+Current repository at audited commit:
+
+GitHub Actions run 34022237179
+- clean: PASS
+- assembleDebug: PASS
+- testDebugUnitTest: PASS
+- lintDebug: PASS
+- BUILD SUCCESSFUL
+
+Observed compiler warning:
+MainActivity.kt used deprecated LocalLifecycleOwner import; replacement is included above.
+
+connectedDebugAndroidTest: NOT TESTED
+Real single-camera preview: NOT TESTED
+Real single-camera recording: NOT TESTED; static P0 found
+Real dual-camera recording: NOT TESTED
+API28 recording/gallery: NOT TESTED; static permission defect found
+bundleRelease: NOT TESTED
+signed AAB: NOT TESTED
+R8/minified release: NOT TESTED
+Play internal test: NOT TESTED
+
+======================================================================
+S. FINAL PRODUCTION CHECKLIST
+======================================================================
+
+P0 FUNCTIONAL CORRECTNESS
+-------------------------
+[ ] RecordingMediaStore uses collection URI + ContentValues.
+[ ] CameraController no longer pre-inserts a MediaStore item.
+[ ] Final saved URI comes from VideoRecordEvent.Finalize.
+[ ] Camera ready becomes true only after bind success.
+[ ] API24–28 legacy storage permissions use maxSdkVersion=28 only.
+[ ] API<=28 permission request is contextual.
+[ ] 5-second single recording saves and plays.
+[ ] 5-second dual recording saves and plays on supported hardware.
+[ ] unsupported dual hardware honestly falls back to single.
+
+RECORDING LIFECYCLE
+-------------------
+[ ] Scripts/Gallery navigation is disabled while recording/finalizing.
+[ ] Stop waits for Finalize.
+[ ] Camera unbind does not race finalization.
+[ ] Activity interruption is tested.
+[ ] Rotation/recreation is tested.
+[ ] Low-storage behavior is tested.
+
+PERMISSIONS
+-----------
+[ ] Camera denial does not block Scripts.
+[ ] Camera denial does not block Gallery.
+[ ] Camera state refreshes after returning from Settings.
+[ ] Microphone denial permits silent recording.
+[ ] Android 10+ receives no legacy storage permission dialog.
+[ ] No unnecessary READ_MEDIA_VIDEO permission is introduced.
+
+SCRIPTS
+-------
+[ ] Create script works.
+[ ] Edit script works.
+[ ] Choose script works.
+[ ] Delete requires confirmation.
+[ ] Delete cancel preserves script.
+[ ] Database errors show feedback.
+[ ] Upgrade install preserves existing scripts.
+[ ] Room schema snapshot stays committed.
+
+TELEPROMPTER
+------------
+[ ] Show/hide works.
+[ ] Auto-scroll works.
+[ ] Auto-scroll stops at end.
+[ ] New script resets scroll position.
+[ ] Large text remains readable.
+[ ] Overlay does not materially degrade camera performance.
+
+GALLERY
+-------
+[ ] App-created recordings load.
+[ ] API28 legacy read permission works.
+[ ] Playback works.
+[ ] Playback dialog releases VideoView.
+[ ] Share works.
+[ ] Delete confirmation works.
+[ ] Delete failure is surfaced.
+[ ] Empty state works.
+[ ] Provider/query failure does not crash.
+
+UI / UX
+-------
+[ ] Start/Stop remains reachable at 320/360dp width.
+[ ] fontScale 1.0 passes.
+[ ] fontScale 1.3 passes.
+[ ] fontScale 1.5 passes.
+[ ] fontScale 2.0 passes.
+[ ] TalkBack traversal passes.
+[ ] Gesture navigation passes.
+[ ] Three-button navigation passes.
+[ ] No duplicated system-bar spacing.
+[ ] Stop icon matches Stop action.
+[ ] Refresh icon matches Refresh action.
+
+PERFORMANCE
+-----------
+[ ] 10-minute single recording succeeds.
+[ ] 10-minute dual recording succeeds on supported hardware.
+[ ] No endless teleprompter polling at end.
+[ ] No major memory growth across repeated recordings.
+[ ] No player leak across repeated gallery dialogs.
+[ ] No ANR around recording finalization.
+
+SECURITY / PRIVACY
+------------------
+[ ] No secrets committed.
+[ ] No INTERNET permission unless a real network feature is introduced.
+[ ] Privacy copy matches Android backup behavior.
+[ ] Final hosted privacy policy exists.
+[ ] Data Safety form matches actual app behavior.
+[ ] Store listing does not claim universal dual-camera support.
+
+BUILD
+-----
+[ ] ./gradlew clean
+[ ] ./gradlew assembleDebug
+[ ] ./gradlew testDebugUnitTest
+[ ] ./gradlew lintDebug
+[ ] ./gradlew check works without release keystore.
+[ ] bundleRelease fails clearly without required signing credentials.
+[ ] bundleRelease succeeds with valid release credentials.
+[ ] Signed AAB installs through Play/internal testing.
+[ ] Minified release smoke-test passes before R8 is permanently enabled.
+
+CI
+--
+[ ] Debug workflow remains green.
+[ ] RecordingMediaStore tests run in CI.
+[ ] Room persistence tests run in CI.
+[ ] Emulator instrumentation job is added only if stable enough to avoid flaky CI.
+
+DEPENDENCIES
+------------
+[ ] Dependency upgrades happen in isolated PRs.
+[ ] CameraX upgrade gets a physical camera matrix.
+[ ] Compose upgrade gets screenshot review.
+[ ] Room upgrade gets schema/DAO tests.
+[ ] Unused icon/theme dependencies are reviewed after V1.
+
+PLAY STORE
+----------
+[ ] targetSdk remains >= 36 or whatever Play requires at release time.
+[ ] versionCode is valid for Play Console history.
+[ ] production applicationId is confirmed.
+[ ] namespace migration is completed or consciously deferred.
+[ ] adaptive icon is verified.
+[ ] monochrome icon is verified.
+[ ] feature graphic/screenshots show actual V1 behavior only.
+[ ] privacy policy URL entered in Play Console.
+[ ] Data Safety completed.
+[ ] content rating completed.
+[ ] app access declaration completed if required.
+[ ] release notes are accurate.
+[ ] internal test passes on multiple OEMs.
+
+======================================================================
+FINAL ENGINEERING DECISION
+======================================================================
+
+Do NOT rewrite DuoCam again.
+
+The current production-hardening rewrite made the correct strategic move: it removed deceptive prototype functionality and reduced the application to a credible creator workflow.
+
+The next work should be narrow and evidence-driven:
+1. Fix CameraX MediaStore output destination.
+2. Fix API24–28 declared support.
+3. Fix lifecycle/permission state.
+4. Protect user-authored scripts.
+5. Build a physical single/dual camera device matrix.
+6. Only then perform architecture/dependency/release polish.
+
+If those steps are completed and physical dual-camera tests pass, DuoCam can move from a promising hardened prototype to a defensible production V1.
+
+======================================================================
+AUTHORITATIVE PLATFORM REFERENCES USED FOR THE AUDIT
+======================================================================
+
+1. Android Developers — MediaStoreOutputOptions.Builder
+Key contract:
+- constructor takes a collection URI
+- setContentValues() supplies values for the created media row
+- CameraX creates the corresponding video row
+
+2. Android Developers — CameraX video capture
+Official pattern uses MediaStore collection URI + ContentValues.
+
+3. Android Developers — Shared media access
+Android 9/API28 and lower shared media paths require legacy external storage permissions.
+
+4. Google Play Console Help — Target API level requirements
+As of August 31, 2026, new Android mobile apps and updates must target Android 16/API36 or higher.
+
+5. Android Developers — Edge-to-edge behavior
+Modern target SDKs require deliberate edge-to-edge/inset handling.
+
+6. Google Play Console Help — Data Safety
+Published apps must complete Data Safety according to actual collection/sharing behavior.
+
+======================================================================
+END OF AUDIT
+======================================================================

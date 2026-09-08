@@ -1,0 +1,73 @@
+<resources>
+    <string name="app_name">DuoCam</string>
+
+    <!-- Navigation -->
+    <string name="tab_capture">Capture</string>
+    <string name="tab_scripts">Scripts</string>
+    <string name="tab_gallery">Gallery</string>
+
+    <!-- Capture screen -->
+    <string name="capture_title">DuoCam</string>
+    <string name="capture_mode_dual">DUAL</string>
+    <string name="capture_mode_single">SINGLE</string>
+    <string name="capture_mode_chip_single">Single camera</string>
+    <string name="capture_mode_chip_dual">Dual camera</string>
+    <string name="capture_audio_label">Record audio</string>
+    <string name="capture_show_script">Show script</string>
+    <string name="capture_hide_script">Hide script</string>
+    <string name="capture_choose_script">Choose script</string>
+    <string name="start_recording">Start recording</string>
+    <string name="stop_recording">Stop recording</string>
+    <string name="saving">Saving…</string>
+    <string name="capture_rec_indicator">●  REC  %1$s</string>
+    <string name="capture_saved_message">Recording saved to your local gallery.</string>
+    <string name="capture_open_gallery">Open gallery</string>
+    <string name="capture_checking">Checking camera support…</string>
+    <string name="capture_dual_supported">Dual-camera recording is supported on this device.</string>
+    <string name="capture_single_supported">This device supports single-camera recording.</string>
+    <string name="capture_permission_required">Camera permission is required.</string>
+    <string name="capture_unavailable">No usable camera is available.</string>
+    <string name="capture_init_error">Camera support could not be checked.</string>
+
+    <!-- Permission screen -->
+    <string name="permission_title">Record your perspective and reaction together.</string>
+    <string name="permission_description">DuoCam uses the camera only when you open Capture. Dual-camera recording is enabled only when Android reports that the device supports it.</string>
+    <string name="permission_allow_camera">Allow camera</string>
+    <string name="permission_open_settings">Open app settings</string>
+
+    <!-- Scripts screen -->
+    <string name="scripts_privacy_description">Scripts are stored locally and can be displayed over a real camera recording. Android system backup or device transfer may include them when backup is enabled.</string>
+    <string name="scripts_empty">No scripts yet. Add one to use the teleprompter.</string>
+    <string name="scripts_add">Add script</string>
+    <string name="scripts_new">New script</string>
+    <string name="scripts_edit">Edit script</string>
+    <string name="scripts_title_label">Title</string>
+    <string name="scripts_content_label">Script text</string>
+    <string name="scripts_delete_title">Delete script?</string>
+    <string name="scripts_delete_message">Delete \"%1$s\" permanently? This action cannot be undone.</string>
+
+    <!-- Gallery screen -->
+    <string name="gallery_title">Local gallery</string>
+    <string name="gallery_description">Only recordings created in Movies/DuoCam are shown.</string>
+    <string name="gallery_refresh">Refresh gallery</string>
+    <string name="gallery_empty">Your saved recordings will appear here.</string>
+    <string name="gallery_play">Play %1$s</string>
+    <string name="gallery_share">Share %1$s</string>
+    <string name="gallery_delete">Delete %1$s</string>
+    <string name="gallery_delete_title">Delete recording?</string>
+    <string name="gallery_delete_message">This removes the local media file. The action cannot be undone.</string>
+
+    <!-- Teleprompter -->
+    <string name="teleprompter_speed">Speed %1$sx</string>
+    <string name="teleprompter_pause">Pause</string>
+    <string name="teleprompter_scroll">Scroll</string>
+
+    <!-- Common -->
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="share">Share</string>
+    <string name="close">Close</string>
+    <string name="use">Use</string>
+    <string name="edit">Edit</string>
+</resources>

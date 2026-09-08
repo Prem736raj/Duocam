@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer Premium Camera Chassis Outline (Centered) -->
+    <path
+        android:fillColor="#1C1917"
+        android:pathData="M34,36h40c3.3,0 6,2.7 6,6v28c0,3.3 -2.7,6 -6,6H34c-3.3,0 -6,-2.7 -6,-6V42C28,38.7 30.7,36 34,36z"
+        android:strokeColor="#FAFAFA"
+        android:strokeWidth="2.5" />
+        
+    <!-- Dual Lens Concept Indicator -->
+    <!-- Rear Camera Lens (Major Focus) -->
+    <path
+        android:fillColor="#09090B"
+        android:pathData="M 46,55 m -12,0 a 12,12 0 1,1 24,0 a 12,12 0 1,1 -24,0"
+        android:strokeColor="#FF2E56"
+        android:strokeWidth="2.5" />
+        
+    <path
+        android:fillColor="#FF2E56"
+        android:pathData="M 46,55 m -5,0 a 5,5 0 1,1 10,0 a 5,5 0 1,1 -10,0" />
+
+    <!-- Front Camera Lens (Minor Focus overlapping) -->
+    <path
+        android:fillColor="#1C1917"
+        android:pathData="M 68,45 m -7,0 a 7,7 0 1,1 14,0 a 7,7 0 1,1 -14,0"
+        android:strokeColor="#FAFAFA"
+        android:strokeWidth="2" />
+
+    <path
+        android:fillColor="#FAFAFA"
+        android:pathData="M 68,45 m -2.5,0 a 2.5,2.5 0 1,1 5,0 a 2.5,2.5 0 1,1 -5,0" />
+
+</vector>

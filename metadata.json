@@ -1,0 +1,6 @@
+{
+  "name": "DuoCam",
+  "description": "DuoCam: real front and back camera recording on supported Android devices with a local teleprompter and gallery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
